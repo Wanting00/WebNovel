@@ -28,10 +28,10 @@ python -m uvicorn main:app --reload --port 8000
 # 终端二：前端
 Set-Location d:\WebNovel
 .\.venv\Scripts\Activate.ps1
-python -m streamlit run streamlit_app.py --server.port 8501
+python -m streamlit run streamlit_app.py --server.port 443
 ```
 
-浏览器访问 <http://localhost:8501>。API 文档在 <http://localhost:8000/docs>。
+浏览器访问 <https://localhost>。API 文档在 <http://localhost:8000/docs>。
 
 ## 3. 工作流
 
