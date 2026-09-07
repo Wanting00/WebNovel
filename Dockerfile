@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+# 先装CPU专用torch，避免pip默认拉取几GB的CUDA依赖（服务器无GPU用不上）
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 模型文件较大，单独一层便于利用构建缓存
