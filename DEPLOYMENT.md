@@ -7,7 +7,7 @@
 - 代码已推送到 GitHub（`git remote add origin ...` + `git push`），`.env` 中 `GOOGLE_API_KEY` 留空（服务器上手动填）。
 - `models/` 目录因体积过大（450MB+）没有随 git 提交，需要单独传输。
 - 已在 AWS 控制台创建好 EC2 实例（Ubuntu），下载了密钥对 `.pem` 文件，放在本机 `C:\Users\<用户名>\.ssh\` 目录。
-- 安全组已放行 22 端口（SSH），22335 端口（Streamlit 前端，最后一步再开）。
+- 安全组已放行 22 端口（SSH），443 端口（HTTPS，最后一步再开）和 80 端口（HTTP 自动跳转 HTTPS）。
 
 ## 第 1 步：本机准备密钥文件权限
 
@@ -119,28 +119,42 @@ RUN pip install --no-cache-dir -r requirements.txt
 ```
 改完在本机提交推送，服务器上 `git pull` 后重新 `docker compose build`。
 
-## 第 8 步：启动容器
+## 第 8 步：生成自签名 SSL 证书（仅首次部署）
+
+HTTPS 由独立的 nginx 容器处理，Streamlit 只监听 Docker 内部的 8501 端口。nginx 启动前必须先生成证书，否则容器会因找不到证书文件而启动失败：
+
+```bash
+bash nginx/generate_cert.sh
+ls -l nginx/certs/
+# 期望看到 lalabots.com.crt 和 lalabots.com.key
+```
+
+脚本用 docker 里的 `alpine/openssl` 镜像生成证书，服务器无需安装 openssl。证书为自签名（域名 `lalabots.com`），有效期 10 年；`nginx/certs/` 已在 `.gitignore` 中，私钥不会进仓库。
+
+## 第 9 步：启动容器
 
 ```bash
 docker compose up -d
-docker compose ps        # 确认两个容器都是 Up
+docker compose ps        # 确认三个容器都是 Up
 ```
 
-## 第 9 步：验证后端
+## 第 10 步：验证后端
 
 ```bash
 curl http://localhost:8000/health
 # 期望输出：{"status":"ok","gemini_configured":true}
 ```
 
-## 第 10 步：AWS 控制台放行前端端口
+## 第 11 步：AWS 控制台放行端口
 
 1. EC2 控制台 → 实例 → 安全 标签 → 点安全组
 2. 编辑入站规则 → 添加规则
-3. 类型：自定义 TCP，端口：**22335**，来源：`0.0.0.0/0`（或指定自己的 IP）
+3. 端口 **443**（HTTPS）和 **80**（HTTP，用于跳转 HTTPS），来源：`0.0.0.0/0`
 4. 保存
 
-浏览器访问 `http://<公网IP>:22335` 验证。
+前提：域名 `lalabots.com` 的 A 记录已解析到服务器公网 IP。
+
+浏览器访问 `https://lalabots.com` 验证。自签名证书不受浏览器信任，会提示“连接不是私密连接”，点“高级 → 继续前往 lalabots.com”即可。8501 端口只在 Docker 内部使用，不再对外暴露。
 
 ## 常用运维命令
 
@@ -152,3 +166,11 @@ git pull && docker compose build && docker compose up -d   # 更新代码后重�
 docker system df                                # 查看磁盘占用
 docker builder prune -af && docker system prune -af        # 清理无用镜像/缓存
 ```
+
+
+ssh -i WebNovel.pem ubuntu@3.18.242.62
+cd WebNovel
+git pull
+nano .env
+docker compose build
+docker compose up -d

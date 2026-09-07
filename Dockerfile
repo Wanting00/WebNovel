@@ -18,7 +18,7 @@ COPY . .
 
 RUN mkdir -p data/chroma data/samples
 
-EXPOSE 8000 443
+EXPOSE 8000 8501
 
 # 具体启动哪个服务由 docker-compose 的 command 覆盖
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

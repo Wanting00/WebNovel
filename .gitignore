@@ -6,3 +6,6 @@ data/style_templates.json
 data/samples/
 .streamlit/
 models/
+
+# SSL 证书（含私钥）在各部署环境用 nginx/generate_cert.sh 生成，不进 git
+nginx/certs/
