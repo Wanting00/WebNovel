@@ -7,7 +7,7 @@
 - 代码已推送到 GitHub（`git remote add origin ...` + `git push`），`.env` 中 `GOOGLE_API_KEY` 留空（服务器上手动填）。
 - `models/` 目录因体积过大（450MB+）没有随 git 提交，需要单独传输。
 - 已在 AWS 控制台创建好 EC2 实例（Ubuntu），下载了密钥对 `.pem` 文件，放在本机 `C:\Users\<用户名>\.ssh\` 目录。
-- 安全组已放行 22 端口（SSH），443 端口（HTTPS，最后一步再开）和 80 端口（HTTP 自动跳转 HTTPS）。
+- 安全组已放行 22 端口（SSH）和 443 端口（HTTPS，最后一步再开）。80 端口不再使用。
 
 ## 第 1 步：本机准备密钥文件权限
 
@@ -129,7 +129,7 @@ ls -l nginx/certs/
 # 期望看到 lalabots.com.crt 和 lalabots.com.key
 ```
 
-脚本用 docker 里的 `alpine/openssl` 镜像生成证书，服务器无需安装 openssl。证书为自签名（域名 `lalabots.com`），有效期 10 年；`nginx/certs/` 已在 `.gitignore` 中，私钥不会进仓库。
+脚本用 docker 里的 `alpine/openssl` 镜像生成证书，服务器无需安装 openssl。证书为自签名（域名 `lalabots.com` 和 EC2 公网 IP `3.18.242.62`），有效期 10 年；`nginx/certs/` 已在 `.gitignore` 中，私钥不会进仓库。
 
 ## 第 9 步：启动容器
 
@@ -149,12 +149,12 @@ curl http://localhost:8000/health
 
 1. EC2 控制台 → 实例 → 安全 标签 → 点安全组
 2. 编辑入站规则 → 添加规则
-3. 端口 **443**（HTTPS）和 **80**（HTTP，用于跳转 HTTPS），来源：`0.0.0.0/0`
+3. 端口 **443**（HTTPS），来源：`0.0.0.0/0`
 4. 保存
 
 前提：域名 `lalabots.com` 的 A 记录已解析到服务器公网 IP。
 
-浏览器访问 `https://lalabots.com` 验证。自签名证书不受浏览器信任，会提示“连接不是私密连接”，点“高级 → 继续前往 lalabots.com”即可。8501 端口只在 Docker 内部使用，不再对外暴露。
+浏览器访问 `https://lalabots.com` 验证。推荐使用 Let’s Encrypt 官方证书，证书受浏览器信任，不会出现自签名警告。8501 端口只在 Docker 内部使用，不再对外暴露。
 
 ## 常用运维命令
 
@@ -172,5 +172,129 @@ ssh -i WebNovel.pem ubuntu@3.18.242.62
 cd WebNovel
 git pull
 nano .env
-docker compose build
+bash nginx/generate_cert.sh
+//docker compose build
 docker compose up -d
+//docker compose up -d --force-recreate
+
+ssh -i WebNovel.pem ubuntu@3.18.242.62
+cd /home/ubuntu/WebNovel
+git pull
+bash nginx/generate_cert.sh
+docker compose build
+docker compose up -d --force-recreate
+docker compose ps
+docker compose logs nginx --tail=100
+curl -vk https://127.0.0.1/
+
+
+正确的链路顺序
+你的理解基本是对的，按网络层看，整个调用链应该是：
+
+浏览器访问 https://3.18.242.62
+AWS EC2 实例收到 443 请求
+nginx 容器监听 443，并做 TLS 终止
+nginx 把请求反向代理到 web 容器的 8501
+web 容器中运行的是 Python + Streamlit
+Streamlit 返回 HTML 页面给 nginx
+nginx 再发回给浏览器
+也就是：
+
+浏览器 -> EC2/安全组 -> nginx容器(443) -> web容器(8501) -> Python(Streamlit)
+
+这条链路分别用了什么命令检查
+1. 浏览器到服务器：检查公网和安全组
+我们验证过的是：
+
+
+这不是“浏览器到公网”本身，而是等价于“服务器本机上的 HTTPS 请求”。
+它判断的是：服务器上的 nginx 已经在 443 上正常响应该请求。
+
+另外还验证了：
+
+
+输出了：
+
+
+这说明域名解析到了服务器 IP，说明“域名 -> 服务器”的第一层是通的。
+
+2. 服务器到 nginx：检查 container 监听端口
+命令：
+
+
+输出里看到：
+
+
+这说明：
+
+Docker 的端口映射已经生效
+主机 80/443 已经转发到了 nginx 容器
+这一步对应的是：
+服务器主机 -> nginx 容器
+
+3. nginx 到 web 容器：检查反向代理和上游
+这一步最关键，命令是：
+
+
+以及：
+
+
+其中：
+
+curl -I http://127.0.0.1:8501 是检查“在服务器上，nginx 反向代理的上游是否可达”
+如果上游不通，nginx 会返回 502 Bad Gateway
+我们实际看到过：
+
+
+这证明了：
+
+nginx 收到了请求
+但它无法从 web:8501 拿到响应
+也就是“nginx 到 web”这一步失败
+4. web 容器到 Python：检查 Streamlit 是否真的在跑
+命令：
+
+
+如果 Streamlit 正常启动，日志会出现：
+
+
+另外也可以直接从容器内验证：
+
+
+这是最直接的方法，判断的是：
+
+web 容器内部的 Python/Streamlit 进程有没有在监听 8501
+5. 服务器本地最终验证
+最终“有没有数据”的验证命令是：
+
+
+这里 -k 的意思是：
+
+-k：跳过证书校验，因为是自签名证书
+如果返回 HTML 页面，说明：
+
+nginx 这层通过了
+反代正常
+上游 web 正常给出页面内容
+这一步是最接近“真成功”的验证。
+
+一条最实用的排查链路
+如果你以后自己排查，建议按这个顺序：
+
+
+这 4 条几乎就能定位到问题在哪一层：
+
+docker compose ps：容器是否都在跑
+nginx logs：443/反代是否正常
+web logs：Streamlit 有没有正常启动
+curl：上游和外层是否都能返回内容
+你现在的顺序是对的，但要补一句
+严格来说，最准确的“数据流”是：
+
+浏览器 -> EC2 安全组 -> nginx 容器(443) -> web 容器(8501) -> Streamlit/Python
+
+而不是单纯“docker 到 python”，因为 docker 是容器运行环境，真正的应用进程是 Python + Streamlit。
+
+你可以直接记住的最重要命令
+
+这几条是最像“排查部署是否通”的命令。
